@@ -1,0 +1,154 @@
+// generator.mjs — Generates the COMPLETE Remotion project in one run: node generator.mjs
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+const files = {};
+
+/* ---------------- package.json ---------------- */
+files["package.json"] = JSON.stringify({
+  name: "chemical-bonds-doc",
+  version: "1.0.0",
+  private: true,
+  scripts: {
+    sfx: "node scripts/generate-sfx.mjs",
+    start: "remotion studio",
+    render: "remotion render ChemicalBonds out/chemical-bonds-1080p.mp4",
+    render4k: "remotion render ChemicalBonds out/chemical-bonds-4k.mp4 --scale=2"
+  },
+  engines: { node: ">=18" },
+  dependencies: {
+    "@remotion/cli": "^4.0.0",
+    "@remotion/google-fonts": "^4.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.0"
+  },
+  devDependencies: { "@types/react": "^18.3.3", "typescript": "^5.6.0" }
+}, null, 2);
+
+/* ---------------- tsconfig.json ---------------- */
+files["tsconfig.json"] = JSON.stringify({
+  compilerOptions: {
+    target: "ES2020",
+    lib: ["DOM", "ES2020"],
+    jsx: "react-jsx",
+    module: "ESNext",
+    moduleResolution: "Bundler",
+    strict: true,
+    skipLibCheck: true,
+    esModuleInterop: true,
+    noEmit: true,
+    forceConsistentCasingInFileNames: true
+  }
+}, null, 2);
+
+/* ---------------- .gitignore / config / README ---------------- */
+files[".gitignore"] = "node_modules\nout\n";
+files["remotion.config.ts"] = `import { Config } from "@remotion/cli/config";
+
+Config.setVideoImageFormat("jpeg");
+Config.setOverwriteOutput(true);
+`;
+
+files["README.md"] = `# مستند «پیوندهای شیمیایی» — AMIR ERFAN KHARAGHANI
+
+پروژه Remotion — 7 صحنه — 154 ثانیه — MP4 H.264 — 1080p و 4K
+
+## اجرا
+1. npm install
+2. npm run sfx      (تولید ۱۲ افکت صوتی)
+3. npm start        (پیش‌نمایش)
+
+## رندر
+- npm run render    => 1080p
+- npm run render4k  => 4K با --scale=2
+
+## جای نریشن فارسی
+در src/ChemicalBonds.tsx کامنت آماده است؛ فایل را در public/ بگذارید.
+`;
+
+/* ---------------- scripts/generate-sfx.mjs ---------------- */
+files["scripts/generate-sfx.mjs"] = `// Procedural SFX generator — pure Node.js, no dependencies.
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const SR = 44100;
+const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "public", "sfx");
+mkdirSync(OUT, { recursive: true });
+
+const D = (s) => Math.round(SR * s);
+
+function sine(dur, f0, o = {}) {
+  const { f1 = f0, gain = 1, attack = 0.01, curve = 4, vib = 0, vibHz = 5, release = 0.05 } = o;
+  const n = D(dur), out = new Float32Array(n);
+  let ph = 0;
+  for (let i = 0; i < n; i++) {
+    const t = i / SR, p = t / dur;
+    const f = f0 * Math.pow(f1 / f0, p);
+    ph += (2 * Math.PI * f) / SR;
+    if (vib) ph += Math.sin(2 * Math.PI * vibHz * t) * vib;
+    let env = Math.min(1, t / attack) * Math.pow(1 - p, curve);
+    if (release < dur) env *= Math.min(1, Math.max(0, (dur - t) / release));
+    out[i] = Math.sin(ph) * env * gain;
+  }
+  return out;
+}
+
+function noise(dur, o = {}) {
+  const { gain = 1, attack = 0.01, curve = 2, bell = false } = o;
+  const n = D(dur), out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const t = i / SR, p = t / dur;
+    const env = bell ? Math.pow(Math.sin(Math.PI * p), 2) : Math.min(1, t / attack) * Math.pow(1 - p, curve);
+    out[i] = (Math.random() * 2 - 1) * env * gain;
+  }
+  return out;
+}
+
+function lowpass(x, cutoff) {
+  const out = new Float32Array(x.length); let y = 0;
+  for (let i = 0; i < x.length; i++) {
+    const fc = typeof cutoff === "function" ? cutoff(i / x.length) : cutoff;
+    const a = 1 - Math.exp(-(2 * Math.PI * fc) / SR);
+    y += a * (x[i] - y); out[i] = y;
+  }
+  return out;
+}
+
+function highpass(x, cutoff) {
+  const lp = lowpass(x, cutoff);
+  const out = new Float32Array(x.length);
+  for (let i = 0; i < x.length; i++) out[i] = x[i] - lp[i];
+  return out;
+}
+
+function mix(...arrs) {
+  const n = Math.max(...arrs.map((a) => a.length));
+  const out = new Float32Array(n);
+  for (const a of arrs) for (let i = 0; i < a.length; i++) out[i] += a[i];
+  return out;
+}
+
+function delay(arr, sec = 0) {
+  const off = D(sec);
+  const out = new Float32Array(arr.length + off);
+  out.set(arr, off);
+  return out;
+}
+
+function normalize(x, peak = 0.85) {
+  let m = 0;
+  for (const v of x) m = Math.max(m, Math.abs(v));
+  const g = m > 0 ? peak / m : 1;
+  const out = new Float32Array(x.length);
+  for (let i = 0; i < x.length; i++) out[i] = x[i] * g;
+  return out;
+}
+
+function wav(samples) {
+  const n = samples.length;
+  const buf = Buffer.alloc(44 + n * 2);
+  buf.write("RIFF", 0); buf.writeUInt32LE(36 + n * 2, 4); buf.write("WAVE", 8);
+  buf.write("fmt ", 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(SR, 24); buf.writeUInt32LE(SR * 2, 28);
